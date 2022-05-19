@@ -33,6 +33,7 @@
         1.0.2 - (2021-01-08) Changed from exit codes to breaks
         1.0.3 - (2021-01-08) Changed from exit codes to breaks
         1.0.4 - (2021-01-08) Default destination validation bug fix (Thanks @byteben)
+        1.0.5 - (2022-05-19) Added Support for Edge Dev and Edge SxS Profiles (Edge Dev, Edge Beta, Edge Canary)
 
 #>
 #Requires -Version 5
@@ -101,23 +102,31 @@ function Backup-EDGEProfiles {
 
     #Date name addition check
     if($AddDate) {
-        $dateName = (get-date -Format ddMMMMyyyy).ToString()
+        $dateName = (get-date -Format yyyy-mm-dd).ToString() + '-'
     } else {
         $dateName = ""
     }
 
     #Setting some important variables
     $edgeProfilesPath = (Join-Path -Path $env:LOCALAPPDATA -ChildPath "\Microsoft\Edge")
+    $edgeDevProfilesPath = (Join-Path -Path $env:LOCALAPPDATA -ChildPath "\Microsoft\Edge Dev")
     $edgeProfilesRegistry = "HKCU\Software\Microsoft\Edge\PreferenceMACs"
-
+    $edgeDevProfilesRegistry = "HKCU\Software\Microsoft\Edge Dev\PreferenceMACs"
+    
     #Export registry key
-    $regBackupDestination = (Join-Path -Path $Destination -ChildPath "\EDGE-ProfilesRegistry$($dateName)-$($env:USERNAME).reg")
+    $regBackupDestination = = (Join-Path -Path $Destination -ChildPath "\$($dateName)EDGE-ProfilesRegistry-$($env:USERNAME).reg")
+    $regBackupDestination_Dev = (Join-Path -Path $Destination -ChildPath "\$($dateName)EDGE_DEV-ProfilesRegistry-$($env:USERNAME).reg")
     Write-Verbose "Exporting Registry backup to $regBackupDestination"
     #Remove any existing destination file, else the export will stall.
     if(($regBackupDestination -ilike "*.reg") -and (Test-Path $regBackupDestination)) {
         Remove-Item $regBackupDestination -Force -ErrorAction SilentlyContinue
     }
+    if(($regBackupDestination_Dev -ilike "*.reg") -and (Test-Path $regBackupDestination_Dev)) {
+        Remove-Item $regBackupDestination_Dev -Force -ErrorAction SilentlyContinue
+    }
+    
     $regCMD = Invoke-Command {reg export "$edgeProfilesRegistry" "$regBackupDestination"}
+    $regCMD_Dev = Invoke-Command {reg export "$edgeDevProfilesRegistry" "$regBackupDestination_Dev"}
 
     #Export user data
 
@@ -136,24 +145,45 @@ function Backup-EDGEProfiles {
         Write-Error "EDGE user data folder missing - terminating!"
         break
     }
+    
+    if(Test-Path $edgeDevProfilesPath){
+        $cacheFolders = Get-ChildItem -Path $edgeDevProfilesPath -r  | Where-Object { $_.PsIsContainer -and $_.Name -eq "Cache" }
+        Foreach ($folder in $cacheFolders)
+        {
+            $rmPath = Join-Path -Path $folder.fullname -ChildPath "\*"
+            Write-Verbose "Emptying $rmPath"
+            Remove-Item $rmPath -Recurse -Force
+        }
+        Write-Verbose "Cleanup completed."
+    } else {
+        Write-Error "EDGE DEV user data folder missing - terminating!"
+        break
+    }
 
+    
     #Creating ZIP Archive
     $zipBackupDestination = (Join-Path -Path $Destination -ChildPath "\EDGE-UserData$($dateName)-$($env:USERNAME).zip")
+    $zipBackupDestination_Dev = (Join-Path -Path $Destination -ChildPath "\$($dateName)-EDGE_DEV-UserData-$($env:USERNAME).zip")
     Write-Verbose "Exporting user data backup to $zipBackupDestination"
     #Remove any existing destination file, else the export will fail.
     if(($zipBackupDestination -ilike "*.zip") -and (Test-Path $zipBackupDestination)) {
         Remove-Item $zipBackupDestination -Force -ErrorAction SilentlyContinue
     }
+    if(($zipBackupDestination_Dev -ilike "*.zip") -and (Test-Path $zipBackupDestination_Dev)) {
+        Remove-Item $zipBackupDestination_Dev -Force -ErrorAction SilentlyContinue
+    }
     #Compressing data to backup location
     try {
         Get-ChildItem -Path $edgeProfilesPath | Compress-Archive -DestinationPath $zipBackupDestination -CompressionLevel Fastest
         Write-Output "EDGE Profile export completed to: $Destination"
+        Get-ChildItem -Path $edgeDevProfilesPath | Compress-Archive -DestinationPath $zipBackupDestination_Dev -CompressionLevel Fastest
+        Write-Output "EDGE DEV Profile export completed to: $Destination"
     } catch {
         #Error out and cleanup
         Write-Error $_
         Remove-Item $zipBackupDestination -Force -ErrorAction SilentlyContinue
-        Remove-Item $regBackupDestination -Force -ErrorAction SilentlyContinue
-        Write-Error "EDGE Backup failed, did you forget to keep EDGE closed?!"
+        Remove-Item $regBackupDestination_Dev -Force -ErrorAction SilentlyContinue
+        Write-Error "EDGE Backup failed, did you forget to keep EDGE / EDGE DEV closed?!"
         break
     }
     #endregion Execute
